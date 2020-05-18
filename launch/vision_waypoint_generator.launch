@@ -1,0 +1,16 @@
+<launch>
+  <arg name="rate" default="0.2"/>
+  <arg name="camera_info_topic" default="/usb_camc/camera_info"/>
+  <arg name="camera_frame" default="camerac"/>
+  <arg name="eps" default="1"/>
+  <arg name="min_samples" default="3"/>
+  <arg name="line_width" default="15"/>
+  <node pkg="drive_waypoints_generater" name="drive_waypoints_generater" type="vision_waypoint_generator.py" output="screen">
+    <param name="rate" type="double" value="$(arg rate)"/>
+    <param name="camera_info_topic" type="str" value="$(arg camera_info_topic)"/>
+    <param name="camera_frame" type="str" value="$(arg camera_frame)"/>
+    <param name="eps" type="int" value="$(arg eps)"/>
+    <param name="min_samples" type="str" value="$(arg min_samples)"/>
+    <param name="line_width" type="str" value="$(arg line_width)"/>
+  </node>
+</launch>

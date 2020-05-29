@@ -89,10 +89,10 @@ class CurrentPose_Sub():
     def callback(self, msg):
         # A Pose with reference coordinate frame and timestamp
         #Header header
-        #Pose pose
+        #Pose pose (location on map frame )
         x ,y ,z, w = msg.pose.orientation.x,msg.pose.orientation.y,msg.pose.orientation.z,msg.pose.orientation.w
         
-        r,p,y = tf.transformations.euler_from_quaternion((x,y,z,w))
+        # r,p,y = tf.transformations.euler_from_quaternion((x,y,z,w))
 
 
 
@@ -107,6 +107,9 @@ class tf_listen_class():
         self.trans = [0,0,0]
         self.rot = [0,0,0,0]
         self.projection_matrix = np.zeros((4,4))
+        self.trans_bl = [0,0,0]
+        self.rot_bl = [0,0,0,0]
+        self.projection_matrix_bl= np.zeros((4,4))
         self.points_in_map = []
     def wait_update_transform(self):
         t = self.listener.waitForTransform('/map',self.camera_frame,rospy.Time.now(), rospy.Duration(500.0))
@@ -116,6 +119,14 @@ class tf_listen_class():
         self.trans = trans
         self.rot = rot
         self.projection_matrix = self.listener.fromTranslationRotation(trans,rot)
+
+        t = self.listener.waitForTransform('/base_link','map',rospy.Time.now(), rospy.Duration(500.0))
+        (trans_bl, rot_bl) = self.listener.lookupTransform('/base_link', 'map', rospy.Time())
+        
+        # update rot trans matrix
+        self.trans_bl = trans_bl
+        self.rot_bl = rot_bl
+        self.projection_matrix_bl = self.listener.fromTranslationRotation(trans_bl,rot_bl)
 
        
     def transformPose(self,points):
@@ -139,7 +150,7 @@ class tf_listen_class():
                 p1.pose.orientation.x,p1.pose.orientation.y,p1.pose.orientation.z,p1.pose.orientation.w = quaternion
                 
             else:
-                p1.pose.orientation.x,p1.pose.orientation.y,p1.pose.orientation.z,p1.pose.orientation.w = 0,0,0,1 #forward
+                p1.pose.orientation.x,p1.pose.orientation.y,p1.pose.orientation.z,p1.pose.orientation.w = 0,0,0,0.5 #forward
             waypoint.pose = p1
             waypoint.twist.twist.linear.x =1.
             lane.waypoints.append(waypoint)
@@ -190,7 +201,7 @@ rate = rospy.Rate(pub_rate)
 # =============== Visualization Setting  ======================
 if debug:
     plt.ion()
-    f,ax = plt.subplots(1,2,figsize=(16,4))
+    f,ax = plt.subplots(1,3,figsize=(16,4))
 
 # =============== Record Setting  ======================
 if record_csv:
@@ -221,15 +232,19 @@ while not rospy.is_shutdown():
         poly_line_mask = np.zeros(distance.shape,dtype=np.uint8)
         cv2.polylines(poly_line_mask, [main_point.reshape(-1,1,2)], False, 1, line_width)
         y,x = np.nonzero(distance.copy() * poly_line_mask)
+        vis_mask = poly_line_mask
     elif waypoints_source == 'main_area':
         pred_max_main = np.all(pred_max == [0,255,0], axis=-1) * 1
-        y,x = np.nonzero(distance.copy() * pred_max_line)
+        y,x = np.nonzero(distance.copy() * pred_max_main)
+        vis_mask = pred_max_main
     elif waypoints_source == 'alt_area':
         pred_max_alt = np.all(pred_max == [0,0,255], axis=-1) * 1
         y,x = np.nonzero(distance.copy() * pred_max_alt)
+        vis_mask = pred_max_alt
     elif waypoints_source == 'line_area':
         pred_max_line = np.all(pred_max == [255,0,255], axis=-1) * 1
-        y,x = np.nonzero(distance.copy() * pred_max_alt)
+        y,x = np.nonzero(distance.copy() * pred_max_line)
+        vis_mask = pred_max_line
     
     # --------------- Check if Point Existance in path  ---------------
     if len(x)==0:
@@ -248,7 +263,7 @@ while not rospy.is_shutdown():
 
     tf_transform_camera_map.wait_update_transform()
     points_in_map = np.dot(tf_transform_camera_map.projection_matrix,transform_points.transpose()).transpose()
-
+    points_in_bl = np.dot(tf_transform_camera_map.projection_matrix_bl,points_in_map.transpose()).transpose()
 
     if cluster_frame == 'camera':
         # Cluster in Camera frame  ---------------
@@ -286,15 +301,29 @@ while not rospy.is_shutdown():
         if -1 in c:
             centroids= np.delete(centroids,(0),axis=0)
         #sort by distance decrease order
-        centroids = centroids[centroids[:,2].argsort()[::-1]]        
-    
-    
-    
+        centroids = centroids[centroids[:,2].argsort()[::-1]]
+    elif cluster_frame =='none':
+        centroids = points_in_map
+
+    centroids_in_bl = np.dot(tf_transform_camera_map.projection_matrix_bl,centroids.transpose()).transpose()
     posearray= tf_transform_camera_map.transformPose(centroids[::-1])
     posearray_pub_seg.publish(posearray)
     
 
+    # Vis debug -----------------------------------------------------
+    pred_max_line = np.all(pred_max == [255,0,255], axis=-1) * 1
+    yy,xx = np.nonzero(distance.copy() * pred_max_line)
+    if len(xx)!=0:
+        # --------------- Row based points matrix  ---------------
+        # distance /100 ----> scale (m)
+        line_points = np.stack((xx*distance[yy,xx]/100.0,yy*distance[yy,xx]/100.0,distance[yy,xx]/100.0)).T.astype(float)
+        transform_line_points = np.ones((len(xx),4),dtype=np.float32)
+        transform_line_points[:,:3] = np.dot(F_intrc_inv,line_points.T).T
+        line_in_map = np.dot(tf_transform_camera_map.projection_matrix,transform_line_points.transpose()).transpose()
+        line_in_bl = np.dot(tf_transform_camera_map.projection_matrix_bl,line_in_map.transpose()).transpose()
 
+
+    
 
     
 
@@ -302,15 +331,23 @@ while not rospy.is_shutdown():
     if debug :
         ax[0].clear()
         ax[1].clear()
-        ax[0].imshow(poly_line_mask)
+        ax[2].clear()
+        ax[0].imshow(vis_mask)
         ax[0].scatter(x,y,s=1,c=c,cmap=plt.cm.cool)
         ax[0].set_title("Cluster {}".format(len(centroids)))
-        ax[1].imshow(poly_line_mask)
+        ax[1].imshow(vis_mask)
         py,px = np.nonzero(distance)
-        ax[1].scatter(px,py,s=1,c=distance[py,px],cmap=plt.cm.cool)
-        ax[1].set_title("Planning Result Overlay with lidar")
+        # ax[1].scatter(px,py,s=1,c=distance[py,px],cmap=plt.cm.cool)
+        # ax[1].set_title("Planning Result Overlay with lidar")
+        ax[2].scatter(-1*points_in_bl[:,1],points_in_bl[:,0],c='b')
+        ax[2].scatter(-1*line_in_bl[:,1],line_in_bl[:,0],c="g")
+        ax[2].scatter(-1*centroids_in_bl[:,1],centroids_in_bl[:,0],c="r")
+        ax[2].set_ylim(0, 50)
+        ax[2].set_xlim(-25, 25)
 
         f.canvas.draw()
+    # if plot_base_link:
+        
     if record_csv:
         points_in_map = tf_transform_camera_map.points_in_map
         dataset = pd.DataFrame({'X': points_in_map[:, 0], 'Y': points_in_map[:, 1]})

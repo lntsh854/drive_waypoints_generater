@@ -9,6 +9,7 @@
   <arg name="cluster_frame" default="map"/>
   <arg name="line_width" default="15"/>
   <arg name="debug" default="false"/>
+  <arg name="vis_marker" default="true"/>
   <arg name="record_csv" default="false"/>
   <arg name="output_file" default="/home/ivslab/Desktop/Waypoints_Vision_CSV/tmp.csv"/>
 
@@ -28,4 +29,9 @@
     <param name="cluster_frame" type="str" value="$(arg cluster_frame)"/>
     <param name="publish_topic" type="str" value="$(arg publish_topic)"/>
   </node>
+  <group if="$(arg vis_marker)">
+    <!-- stuff that will only be evaluated if foo is true -->
+    <node pkg="ground_truth_vis" name="pred_marker_vis" type="waypoint_marker_publisher" output="screen">
+  </node>
+  </group>
 </launch>
